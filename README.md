@@ -91,6 +91,75 @@ Si vous voulez exposer directement (non recommandé) :
 - `npm run client:websocket` - Contrôler via WebSocket direct
 - `npm run client:info` - Afficher les informations du navigateur (pages ouvertes, etc.)
 
+## Mode recommandé (sans ngrok) : Agent -> VPS Relay -> CLI
+
+Objectif : **aucun prérequis côté machine "serve"** (Mac/PC). L'agent ouvre une connexion sortante vers la VPS, et la VPS pilote via un `agentId`.
+
+### 1) VPS (relay WSS)
+
+Sur la VPS :
+
+```bash
+npm install
+
+# Génère un certificat auto-signé (SAN IP) dans relay/cert/
+RELAY_IP="109.176.198.25" npm run relay:cert
+```
+
+Le script affiche un **fingerprint SHA-256**. Garde-le, tu vas le pinner côté agent et côté CLI.
+
+Ensuite démarre le relay :
+
+```bash
+RELAY_PORT=4433 npm run relay
+```
+
+Endpoints :
+- `wss://109.176.198.25:4433/agent`
+- `wss://109.176.198.25:4433/cli`
+
+### 2) Mac/PC (agent)
+
+Sur le Mac/PC qui doit héberger Chrome :
+
+```bash
+npm install
+
+# Remplace par le fingerprint affiché par relay:cert
+export RELAY_CERT_FINGERPRINT256="AA:BB:...:FF"
+export RELAY_IP="109.176.198.25"
+export RELAY_PORT="4433"
+
+npm run agent
+```
+
+L'agent ouvre Chrome sur `about:blank`, se connecte en CDP local, puis se connecte au relay.
+Il affiche un `agentId` du type `ag_...`.
+
+### 3) VPS (CLI)
+
+Sur la VPS :
+
+```bash
+export RELAY_CERT_FINGERPRINT256="AA:BB:...:FF"
+export RELAY_IP="109.176.198.25"
+export RELAY_PORT="4433"
+
+# Liste les agents connectés
+npm run cli -- list
+
+# Naviguer
+npm run cli -- navigate ag_xxx https://example.com
+
+# Eval JS
+npm run cli -- eval ag_xxx "1+2"
+```
+
+### Note sécurité
+
+- Le TLS est **auto-signé**, mais sécurisé via **pinning** (fingerprint SHA-256).
+- **Auth non implémentée pour l'instant** (prototype). Ne l'expose pas à Internet sans ajouter PSK/pairing code.
+
 ## Utilisation depuis une VM distante
 
 Pour contrôler le navigateur depuis une VM distante ou un autre appareil :

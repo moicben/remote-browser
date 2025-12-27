@@ -23,5 +23,8 @@ Thumbs.db
 .env
 .env.local
 
+# Relay TLS certs (auto-signés)
+relay/cert/
+
 # Screenshots (optionnel - vous pouvez les garder si nécessaire)
 # *.png
