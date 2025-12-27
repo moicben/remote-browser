@@ -79,23 +79,14 @@ async function connectWithPuppeteer() {
       throw new Error('Aucune page trouvée dans le navigateur');
     }
     
-    // Utiliser l'URL WebSocket directement si disponible, sinon utiliser browserURL
-    let browser;
-    if (targets[0].webSocketDebuggerUrl && targets[0].webSocketDebuggerUrl.startsWith('wss://')) {
-      console.log(`🔗 Connexion via WebSocket direct: ${targets[0].webSocketDebuggerUrl.substring(0, 60)}...`);
-      browser = await puppeteer.connect({
-        browserWSEndpoint: targets[0].webSocketDebuggerUrl,
-        defaultViewport: null,
-        protocolTimeout: 30000,
-      });
-    } else {
-      console.log(`🔗 Connexion via browserURL`);
-      browser = await puppeteer.connect({
-        browserURL: CHROME_DEBUG_URL,
-        defaultViewport: null,
-        protocolTimeout: 30000,
-      });
-    }
+    // Utiliser browserURL au lieu de browserWSEndpoint pour une meilleure compatibilité avec ngrok
+    // browserURL gère mieux les proxies et les connexions distantes
+    console.log(`🔗 Connexion via browserURL (meilleure compatibilité avec ngrok)`);
+    const browser = await puppeteer.connect({
+      browserURL: CHROME_DEBUG_URL,
+      defaultViewport: null,
+      protocolTimeout: 30000,
+    });
     
     const pages = await browser.pages();
     console.log(`✅ Connecté ! ${pages.length} page(s) ouverte(s)`);

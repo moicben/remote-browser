@@ -191,68 +191,145 @@ function createServer() {
 
   wss.on('connection', (ws, req) => {
     const targetUrl = `ws://localhost:${CHROME_DEBUG_PORT}${req.url}`;
-    console.log(`📡 Connexion WebSocket établie depuis ${req.socket.remoteAddress}`);
+    const clientIp = req.socket.remoteAddress;
+    console.log(`📡 Connexion WebSocket établie depuis ${clientIp}`);
     console.log(`   Chemin: ${req.url}`);
     console.log(`   Cible: ${targetUrl}`);
     
     let target = null;
     let isClosing = false;
+    let clientReady = false;
+    let targetReady = false;
     
     const cleanup = () => {
       if (isClosing) return;
       isClosing = true;
       if (target && target.readyState === WebSocket.OPEN) {
-        target.close();
+        target.close(1000, 'Proxy cleanup');
       }
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.close();
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(1000, 'Proxy cleanup');
+      }
+    };
+    
+    // Buffer les messages jusqu'à ce que les deux connexions soient prêtes
+    const clientMessageQueue = [];
+    const targetMessageQueue = [];
+    
+    const flushQueues = () => {
+      if (clientReady && targetReady) {
+        // Envoyer les messages en attente du client vers Chrome
+        while (clientMessageQueue.length > 0) {
+          const msg = clientMessageQueue.shift();
+          if (target && target.readyState === WebSocket.OPEN) {
+            target.send(msg);
+          }
+        }
+        // Envoyer les messages en attente de Chrome vers le client
+        while (targetMessageQueue.length > 0) {
+          const msg = targetMessageQueue.shift();
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(msg);
+          }
+        }
       }
     };
     
     try {
-      target = new WebSocket(targetUrl);
+      // Marquer le client comme prêt
+      clientReady = true;
+      
+      // Créer la connexion vers Chrome
+      target = new WebSocket(targetUrl, {
+        // Options pour améliorer la compatibilité
+        handshakeTimeout: 10000,
+      });
       
       target.on('open', () => {
+        targetReady = true;
         console.log(`✅ Connexion WebSocket vers Chrome établie`);
+        flushQueues();
       });
       
       target.on('error', (error) => {
         console.error(`❌ Erreur WebSocket Chrome:`, error.message);
+        console.error(`   Stack:`, error.stack);
         if (!isClosing) {
           cleanup();
         }
       });
       
       target.on('close', (code, reason) => {
-        console.log(`🔌 Connexion WebSocket Chrome fermée (code: ${code})`);
+        console.log(`🔌 Connexion WebSocket Chrome fermée (code: ${code}, reason: ${reason.toString()})`);
         if (!isClosing) {
           cleanup();
         }
       });
       
-      ws.on('message', (data) => {
-        if (target && target.readyState === WebSocket.OPEN) {
-          target.send(data);
-        } else {
-          console.warn(`⚠️  Tentative d'envoi de message mais Chrome n'est pas connecté`);
+      target.on('ping', (data) => {
+        // Répondre aux pings de Chrome
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.pong(data);
         }
       });
       
-      target.on('message', (data) => {
+      target.on('pong', (data) => {
+        // Transférer les pongs
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
+          ws.pong(data);
+        }
+      });
+      
+      // Gérer les messages du client vers Chrome
+      ws.on('message', (data, isBinary) => {
+        if (target && target.readyState === WebSocket.OPEN && targetReady) {
+          target.send(data, { binary: isBinary });
+        } else if (targetReady) {
+          // Chrome n'est pas encore connecté, mettre en queue
+          clientMessageQueue.push({ data, isBinary });
+        } else {
+          // Les deux ne sont pas prêts, mettre en queue
+          clientMessageQueue.push({ data, isBinary });
+        }
+      });
+      
+      // Gérer les messages de Chrome vers le client
+      target.on('message', (data, isBinary) => {
+        if (ws.readyState === WebSocket.OPEN && clientReady) {
+          ws.send(data, { binary: isBinary });
+        } else if (clientReady) {
+          // Le client n'est pas encore prêt, mettre en queue
+          targetMessageQueue.push({ data, isBinary });
+        } else {
+          // Les deux ne sont pas prêts, mettre en queue
+          targetMessageQueue.push({ data, isBinary });
+        }
+      });
+      
+      // Gérer les pings du client
+      ws.on('ping', (data) => {
+        if (target && target.readyState === WebSocket.OPEN) {
+          target.ping(data);
+        }
+      });
+      
+      ws.on('pong', (data) => {
+        // Transférer les pongs
+        if (target && target.readyState === WebSocket.OPEN) {
+          target.pong(data);
         }
       });
       
       ws.on('error', (error) => {
         console.error(`❌ Erreur WebSocket client:`, error.message);
+        console.error(`   Stack:`, error.stack);
         if (!isClosing) {
           cleanup();
         }
       });
       
       ws.on('close', (code, reason) => {
-        console.log(`🔌 Connexion WebSocket client fermée (code: ${code})`);
+        console.log(`🔌 Connexion WebSocket client fermée (code: ${code}, reason: ${reason.toString()})`);
         if (!isClosing) {
           cleanup();
         }
@@ -260,7 +337,8 @@ function createServer() {
       
     } catch (error) {
       console.error(`❌ Erreur lors de la création du proxy WebSocket:`, error.message);
-      if (ws.readyState === WebSocket.OPEN) {
+      console.error(`   Stack:`, error.stack);
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close(1011, 'Internal server error');
       }
     }
