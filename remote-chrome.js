@@ -180,29 +180,90 @@ function createServer() {
 
   // Proxy WebSocket pour DevTools (géré par WebSocketServer ci-dessous)
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ 
+    server,
+    // Accepter les connexions même si elles arrivent via ngrok (WSS -> WS)
+    verifyClient: (info) => {
+      console.log(`🔍 Tentative de connexion WebSocket depuis ${info.origin || 'unknown'}`);
+      return true;
+    }
+  });
 
   wss.on('connection', (ws, req) => {
     const targetUrl = `ws://localhost:${CHROME_DEBUG_PORT}${req.url}`;
-    console.log(`📡 Connexion WebSocket depuis ${req.socket.remoteAddress} vers ${targetUrl}`);
+    console.log(`📡 Connexion WebSocket établie depuis ${req.socket.remoteAddress}`);
+    console.log(`   Chemin: ${req.url}`);
+    console.log(`   Cible: ${targetUrl}`);
     
-    const target = new WebSocket(targetUrl);
+    let target = null;
+    let isClosing = false;
     
-    ws.on('message', (data) => {
-      target.send(data);
-    });
+    const cleanup = () => {
+      if (isClosing) return;
+      isClosing = true;
+      if (target && target.readyState === WebSocket.OPEN) {
+        target.close();
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
     
-    target.on('message', (data) => {
-      ws.send(data);
-    });
-    
-    ws.on('close', () => {
-      target.close();
-    });
-    
-    target.on('close', () => {
-      ws.close();
-    });
+    try {
+      target = new WebSocket(targetUrl);
+      
+      target.on('open', () => {
+        console.log(`✅ Connexion WebSocket vers Chrome établie`);
+      });
+      
+      target.on('error', (error) => {
+        console.error(`❌ Erreur WebSocket Chrome:`, error.message);
+        if (!isClosing) {
+          cleanup();
+        }
+      });
+      
+      target.on('close', (code, reason) => {
+        console.log(`🔌 Connexion WebSocket Chrome fermée (code: ${code})`);
+        if (!isClosing) {
+          cleanup();
+        }
+      });
+      
+      ws.on('message', (data) => {
+        if (target && target.readyState === WebSocket.OPEN) {
+          target.send(data);
+        } else {
+          console.warn(`⚠️  Tentative d'envoi de message mais Chrome n'est pas connecté`);
+        }
+      });
+      
+      target.on('message', (data) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      });
+      
+      ws.on('error', (error) => {
+        console.error(`❌ Erreur WebSocket client:`, error.message);
+        if (!isClosing) {
+          cleanup();
+        }
+      });
+      
+      ws.on('close', (code, reason) => {
+        console.log(`🔌 Connexion WebSocket client fermée (code: ${code})`);
+        if (!isClosing) {
+          cleanup();
+        }
+      });
+      
+    } catch (error) {
+      console.error(`❌ Erreur lors de la création du proxy WebSocket:`, error.message);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1011, 'Internal server error');
+      }
+    }
   });
 
   server.listen(PORT, '0.0.0.0', () => {
