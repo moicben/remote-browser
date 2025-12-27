@@ -24,7 +24,9 @@ function sleep(ms) {
 }
 
 async function getChromeBrowserWsUrl() {
-  // Node 18+ fetch
+  // DEPRECATED: /json/version renvoie le WS "browser" (devtools/browser/...)
+  // Les commandes Page.* / Runtime.* doivent viser un WS "page" (devtools/page/...).
+  // On garde cette fonction pour compat mais on ne l'utilise plus.
   const res = await fetch(`http://127.0.0.1:${CHROME_DEBUG_PORT}/json/version`);
   if (!res.ok) throw new Error(`Erreur /json/version: HTTP ${res.status}`);
   const data = await res.json();
@@ -32,6 +34,27 @@ async function getChromeBrowserWsUrl() {
     throw new Error("webSocketDebuggerUrl manquant dans /json/version");
   }
   return data.webSocketDebuggerUrl;
+}
+
+async function getChromePageWsUrl() {
+  const res = await fetch(`http://127.0.0.1:${CHROME_DEBUG_PORT}/json`);
+  if (!res.ok) throw new Error(`Erreur /json: HTTP ${res.status}`);
+  const targets = await res.json();
+
+  if (!Array.isArray(targets)) {
+    throw new Error("Réponse /json inattendue (tableau attendu)");
+  }
+
+  const page =
+    targets.find((t) => t && t.type === "page" && t.url === "about:blank") ||
+    targets.find((t) => t && t.type === "page") ||
+    targets[0];
+
+  if (!page || !page.webSocketDebuggerUrl) {
+    throw new Error("Aucune target page avec webSocketDebuggerUrl trouvée dans /json");
+  }
+
+  return page.webSocketDebuggerUrl;
 }
 
 async function startChrome() {
@@ -111,7 +134,7 @@ async function main() {
   let chromeWsUrl = null;
   for (let i = 0; i < 30; i++) {
     try {
-      chromeWsUrl = await getChromeBrowserWsUrl();
+      chromeWsUrl = await getChromePageWsUrl();
       break;
     } catch {
       await sleep(300);
