@@ -54,6 +54,32 @@ let CHROME_DEBUG_URL = null;
 async function connectWithPuppeteer() {
   try {
     console.log('🔌 Connexion au navigateur via Puppeteer...');
+    console.log(`📍 Tentative de connexion à: ${CHROME_DEBUG_URL}`);
+    
+    // Test d'abord si l'endpoint /json est accessible
+    try {
+      const testUrl = `${CHROME_DEBUG_URL}/json`;
+      console.log(`🔍 Test de l'endpoint: ${testUrl}`);
+      const response = await fetch(testUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      const data = await response.json();
+      console.log(`✅ Endpoint /json accessible, ${data.length} page(s) trouvée(s)`);
+      
+      // Vérifier si les URLs WebSocket sont correctement converties
+      if (data.length > 0 && data[0].webSocketDebuggerUrl) {
+        const wsUrl = data[0].webSocketDebuggerUrl;
+        if (wsUrl.startsWith('wss://') || wsUrl.includes(CHROME_DEBUG_URL.replace('https://', '').replace('http://', ''))) {
+          console.log(`✅ URLs WebSocket correctement converties: ${wsUrl.substring(0, 50)}...`);
+        } else {
+          console.warn(`⚠️  URL WebSocket semble être locale: ${wsUrl}`);
+        }
+      }
+    } catch (testError) {
+      console.error('❌ Erreur lors du test de l\'endpoint /json:', testError.message);
+      throw new Error(`Impossible d'accéder à l'endpoint /json: ${testError.message}`);
+    }
     
     const browser = await puppeteer.connect({
       browserURL: CHROME_DEBUG_URL,
@@ -72,6 +98,9 @@ async function connectWithPuppeteer() {
     return { browser, page };
   } catch (error) {
     console.error('❌ Erreur de connexion Puppeteer:', error.message);
+    if (error.stack) {
+      console.error('   Stack:', error.stack.split('\n').slice(0, 3).join('\n'));
+    }
     throw error;
   }
 }

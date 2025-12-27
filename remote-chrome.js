@@ -95,11 +95,62 @@ function createServer() {
       const targetUrl = `http://localhost:${CHROME_DEBUG_PORT}${targetPath}`;
       console.log(`📥 Proxy: ${req.method} ${targetPath} -> ${targetUrl}`);
       
+      // Détecter l'URL publique (ngrok) depuis les headers de la requête
+      // ngrok passe souvent X-Forwarded-Proto et X-Forwarded-Host
+      const protocol = req.get('x-forwarded-proto') || req.protocol || (req.secure ? 'https' : 'http');
+      const host = req.get('x-forwarded-host') || req.get('host') || req.headers.host;
+      const publicBaseUrl = host ? `${protocol}://${host}` : null;
+      
       fetch(targetUrl)
         .then(response => {
           return response.text().then(data => ({ response, data }));
         })
         .then(({ response, data }) => {
+          // Si c'est une réponse JSON et qu'on a une URL publique, remplacer les URLs WebSocket
+          if (publicBaseUrl && response.headers.get('content-type')?.includes('application/json')) {
+            try {
+              const jsonData = JSON.parse(data);
+              
+              // Fonction pour convertir les URLs WebSocket localhost en URLs publiques
+              const convertWebSocketUrl = (wsUrl) => {
+                if (!wsUrl || typeof wsUrl !== 'string') return wsUrl;
+                // Remplacer ws://localhost:9222 par wss://ngrok-url
+                if (wsUrl.startsWith('ws://localhost:9222')) {
+                  const wsPath = wsUrl.replace('ws://localhost:9222', '');
+                  return publicBaseUrl.replace('http://', 'wss://').replace('https://', 'wss://') + wsPath;
+                }
+                return wsUrl;
+              };
+              
+              // Si c'est un tableau (comme /json)
+              if (Array.isArray(jsonData)) {
+                jsonData.forEach(item => {
+                  if (item.webSocketDebuggerUrl) {
+                    item.webSocketDebuggerUrl = convertWebSocketUrl(item.webSocketDebuggerUrl);
+                  }
+                  if (item.devtoolsFrontendUrl) {
+                    // Mettre à jour aussi devtoolsFrontendUrl pour utiliser l'URL publique
+                    item.devtoolsFrontendUrl = item.devtoolsFrontendUrl.replace(
+                      /ws=localhost:9222/g,
+                      `ws=${publicBaseUrl.replace('http://', 'wss://').replace('https://', 'wss://')}`
+                    );
+                  }
+                });
+                data = JSON.stringify(jsonData);
+              }
+              // Si c'est un objet (comme /json/version)
+              else if (typeof jsonData === 'object' && jsonData !== null) {
+                if (jsonData.webSocketDebuggerUrl) {
+                  jsonData.webSocketDebuggerUrl = convertWebSocketUrl(jsonData.webSocketDebuggerUrl);
+                }
+                data = JSON.stringify(jsonData);
+              }
+            } catch (e) {
+              // Si ce n'est pas du JSON valide ou erreur de parsing, garder les données originales
+              console.log('⚠️  Impossible de modifier les URLs WebSocket:', e.message);
+            }
+          }
+          
           // Copier les headers de la réponse
           res.status(response.status);
           response.headers.forEach((value, key) => {
